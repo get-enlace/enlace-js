@@ -1,0 +1,31 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  # @get-enlace/ui is installed from GitHub Packages (see .npmrc) — npm
+  # install needs at least read access to resolve it, even though this
+  # workflow never publishes anything itself.
+  packages: read
+
+jobs:
+  checks:
+    name: Typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@get-enlace'
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test

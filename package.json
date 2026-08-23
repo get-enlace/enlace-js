@@ -1,0 +1,26 @@
+{
+  "name": "enlace-js",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Node/JS adapters for Enlace (@get-enlace/express, and future @get-enlace/nest, @get-enlace/fastify, ...) — each serves the OpenAPI document and the @get-enlace/ui bundle in its own ecosystem's idiomatic way. See github.com/get-enlace/enlace-ui for the canvas UI itself and the overall architecture.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/get-enlace/enlace-js.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
