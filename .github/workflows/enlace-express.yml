@@ -218,10 +218,17 @@ jobs:
         run: npm pkg set "dependencies.@get-enlace/ui=${{ env.pinned_version }}" --workspace @get-enlace/express
 
       - name: Publish to npm (prod)
+        # --registry explicitly: packages/enlace-express/package.json's own
+        # publishConfig.registry points at GitHub Packages (needed so
+        # deploy-dev's plain `npm publish` defaults there) — publishConfig
+        # takes precedence over setup-node's registry-url above, so without
+        # this flag npm publish would silently try GitHub Packages here too
+        # and fail with a 401 (confirmed — this exact bug hit enlace-ui's
+        # own first prod publish attempt before this fix).
         # --access public: scoped packages (@get-enlace/...) default to
         # restricted access on npmjs.org, which needs a paid org plan
         # unless publish explicitly opts into public access.
-        run: npm publish --workspace @get-enlace/express --access public
+        run: npm publish --workspace @get-enlace/express --registry https://registry.npmjs.org --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
