@@ -1,4 +1,4 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import { Controller, Get, Inject, HttpException, HttpStatus } from '@nestjs/common';
 import { ENLACE_OPTIONS } from './constants.js';
 import { loadSpec } from './specLoader.js';
 import type { EnlaceOptions } from './enlace.module.js';
@@ -18,6 +18,13 @@ export class EnlaceController {
 
   @Get('spec')
   getSpec() {
+    if (this.options.spec == null) {
+      throw new HttpException(
+        'No OpenAPI spec configured — call EnlaceModule.setSpec(app, spec) in main.ts, '
+        + 'or pass { spec } to EnlaceModule.forRoot().',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
     return loadSpec(this.options.spec);
   }
 }

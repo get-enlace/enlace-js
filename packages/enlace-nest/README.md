@@ -13,15 +13,38 @@ npm install @get-enlace/nest
 
 ## Usage
 
+### With `@nestjs/swagger` (generated spec)
+
 ```ts
+// app.module.ts — just import, no config needed
 import { EnlaceModule } from '@get-enlace/nest';
 
+@Module({ imports: [EnlaceModule] })
+export class AppModule {}
+
+// main.ts — one line after the app is built
+const app = await NestFactory.create(AppModule);
+const doc = SwaggerModule.createDocument(app, config);
+EnlaceModule.setSpec(app, doc);
+```
+
+### With a static spec (file path or pre-parsed object)
+
+```ts
 @Module({ imports: [EnlaceModule.forRoot({ spec: './openapi.json' })] })
 export class AppModule {}
 ```
 
-`spec` is a file path, a URL, or an already-parsed OpenAPI 3.x object — whatever's easiest to
-point at your API's own document.
+`spec` accepts a file path, a URL, or an already-parsed OpenAPI 3.x object.
+
+### Custom mount path
+
+By default the canvas is at `/enlace`. To change it:
+
+```ts
+@Module({ imports: [EnlaceModule.forRoot({ path: 'canvas' })] })
+export class AppModule {}
+```
 
 ## Learn more
 
