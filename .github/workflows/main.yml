@@ -40,7 +40,13 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           for dir in enlace-express enlace-nest; do
             pkg="$(node -p "require('./packages/${dir}/package.json').name")"
-            dev_version="$(node -p "require('./packages/${dir}/package.json').version")-dev.${{ github.run_number }}"
+            # run_id, not run_number: run_number resets to 1 per workflow
+            # file, which collided head-on with @get-enlace/express's
+            # existing dev.1-dev.4 versions (published by enlace-ui's old
+            # CI, under this same repo-local counter, before the package
+            # moved here). run_id is unique across every run on GitHub,
+            # forever, so this can't recur.
+            dev_version="$(node -p "require('./packages/${dir}/package.json').version")-dev.${{ github.run_id }}"
             npm pkg set version="$dev_version" --workspace "$pkg"
             npm publish --workspace "$pkg" --tag dev
             git tag "${dir}-v${dev_version}"
