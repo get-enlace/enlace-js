@@ -17,35 +17,37 @@ More planned: `@get-enlace/fastify`. Each new adapter is its own package
 here, alongside the others, not a separate repo — same shared CI, same
 install/build conventions.
 
-## Development
+## Install & usage
+
+**Express:**
 
 ```bash
-npm install
-npm run typecheck
-npm run build
+npm install @get-enlace/express
 ```
 
-`@get-enlace/ui` is installed from GitHub Packages (`dev` dist-tag today —
-see `.npmrc`), not as a local workspace sibling — this repo has no access
-to that package's source, only its published bundle.
+```ts
+import { enlace } from '@get-enlace/express';
 
-## Publishing
+app.use('/enlace', enlace({ spec: './openapi.json' }));
+```
 
-Three workflows under `.github/workflows/`:
+**NestJS:**
 
-- **`build.yml`** — every PR: typecheck, build, test, e2e across the whole
-  workspace.
-- **`enlace-express.yml`** / **`enlace-nest.yml`** — one per package,
-  path-scoped to that package's own directory so unrelated packages don't
-  rebuild or republish on each other's changes. On push to `main`:
-  `deploy-dev` publishes to GitHub Packages' `dev` dist-tag (skipped if
-  that package hasn't changed since its last publish), then `deploy-prod`
-  — gated behind the `production` environment's required-reviewer
-  approval — publishes the version already committed in that package's
-  `package.json` to npmjs.org, tags it, and bumps the patch version for
-  next time.
+```bash
+npm install @get-enlace/nest
+```
 
-Publishing to npmjs.org needs an `NPM_TOKEN` secret scoped to the
-`production` GitHub Environment. The `development`/`production`
-environments already exist (Settings → Environments); `production` still
-needs required reviewers configured there before the gate does anything.
+```ts
+import { EnlaceModule } from '@get-enlace/nest';
+
+@Module({ imports: [EnlaceModule.forRoot({ spec: './openapi.json' })] })
+export class AppModule {}
+```
+
+In both cases, `spec` is a file path, a URL, or an already-parsed OpenAPI
+3.x object — whatever's easiest to point at your API's own document.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for local development setup and
+how the CI/CD pipeline works.
