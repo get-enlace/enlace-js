@@ -54,12 +54,29 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Retries with a rebase on a rejected push: this job and
+      # enlace-express.yml's handle-ui-release both fire from the same
+      # repository_dispatch and can race to push main concurrently — even
+      # though they touch different files (per-package ui-version.txt,
+      # chosen specifically to avoid a same-file conflict), they still both
+      # advance the same branch pointer, so one can lose a non-fast-forward
+      # race regardless. Confirmed happening on a real dispatch. The two
+      # commits touch disjoint files, so a rebase here is conflict-free.
       - name: Commit pinned version
         if: steps.pin.outputs.changed == 'true'
         run: |
           git add packages/enlace-nest/ui-version.txt
           git commit -m "chore(enlace-nest): pin @get-enlace/ui to ${{ github.event.client_payload.ui-version }} (enlace-ui-release dispatch)"
-          git push origin HEAD:main
+          for i in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "push rejected (attempt $i), rebasing onto latest main and retrying..."
+            git fetch origin main
+            git rebase origin/main
+          done
+          echo "::error::failed to push pin commit after 5 attempts"
+          exit 1
 
   # Unconditional — runs on every trigger (push, or repository_dispatch for
   # either environment). Its own npm ci resolves @get-enlace/ui via the
