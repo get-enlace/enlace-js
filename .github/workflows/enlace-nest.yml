@@ -8,10 +8,83 @@ on:
       - package.json
       - package-lock.json
       - .github/workflows/enlace-nest.yml
-  workflow_dispatch: {}
+  # Fired by enlace-ui's own release workflow after it publishes (dev or
+  # prod) — release-strategy.md §5/§6. This package is dependency-based
+  # (§2): ordinary patch/minor enlace-ui releases reach consumers on their
+  # own next `npm install` via the semver-range dependency below, with no
+  # rebuild needed here. This listener only has real work to do when the
+  # payload signals a major bump — see handle-ui-release below. No
+  # workflow_dispatch escape hatch — a manual override is just a commit
+  # (e.g. a manually-bumped dependency range) pushed to main.
+  repository_dispatch:
+    types: [enlace-ui-release]
 
 jobs:
+  # Only meaningful for a *production* dispatch — a dev dispatch's
+  # ui-version can carry a "-dev.<run>" prerelease suffix, which would
+  # still extract a real major version below and could widen the range
+  # against a major that hasn't actually shipped to npmjs.org yet. Decides
+  # whether @get-enlace/ui's declared dependency range needs widening, and
+  # if so, does that and falls through into the normal deploy-dev/deploy-prod
+  # path below — it never publishes anything itself.
+  handle-ui-release:
+    if: github.event_name == 'repository_dispatch' && github.event.client_payload.environment == 'production'
+    runs-on: ubuntu-latest
+    outputs:
+      bumped: ${{ steps.check.outputs.bumped }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Read incoming ui-version
+        id: incoming
+        run: echo "ui_version=${{ github.event.client_payload.ui-version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Compare major version against declared dependency
+        id: check
+        run: |
+          incoming_major="$(echo "${{ steps.incoming.outputs.ui_version }}" | cut -d. -f1)"
+          # @get-enlace/ui's dependency entry is a bare "dev" dist-tag until
+          # enlace-ui's first real prod semver release exists (see README) —
+          # nothing to compare a major against yet, so this is always a
+          # no-op until that entry becomes a real ^N.x range.
+          current="$(node -p "require('./packages/enlace-nest/package.json').dependencies['@get-enlace/ui']")"
+          if [[ ! "$current" =~ ^\^?[0-9]+ ]]; then
+            echo "no-op: @get-enlace/ui dependency is '$current', not a semver range yet — nothing to compare"
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          current_major="$(echo "$current" | tr -d '^' | cut -d. -f1)"
+          if [ "$incoming_major" -gt "$current_major" ]; then
+            echo "@get-enlace/ui major bumped ($current -> ^${incoming_major}.0.0) — widening the range"
+            npm pkg set "dependencies.@get-enlace/ui=^${incoming_major}.0.0" --workspace @get-enlace/nest
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no-op: incoming major ($incoming_major) does not exceed current floor ($current_major)"
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit widened dependency range
+        if: steps.check.outputs.bumped == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/enlace-nest/package.json
+          git commit -m "chore(enlace-nest): widen @get-enlace/ui range for major ${{ steps.incoming.outputs.ui_version }}"
+          git push origin HEAD:main
+
   deploy-dev:
+    # Runs on ordinary pushes unconditionally; on a dispatch-triggered run,
+    # only proceeds if handle-ui-release actually needed to act (a
+    # same/lower-major release is a legitimate no-op for this job too — the
+    # semver-range dependency already covers it without a rebuild here).
+    if: |
+      github.event_name == 'push' ||
+      needs.handle-ui-release.outputs.bumped == 'true'
+    needs: [handle-ui-release]
     runs-on: ubuntu-latest
     environment: development
     permissions:
@@ -20,6 +93,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # ref: main, not the default (github.sha, the pre-dispatch SHA on
+          # a repository_dispatch run) — handle-ui-release may have just
+          # committed a widened dependency range in this same run, and this
+          # checkout needs to see it, not the stale trigger-time commit.
+          ref: main
           # Full history + tags — "Check for changes" below diffs against
           # this package's most recent enlace-nest-v* tag (dev or prod) to
           # decide whether there's anything new to publish.
@@ -80,10 +158,10 @@ jobs:
           git tag "enlace-nest-v${{ steps.version.outputs.devVersion }}"
           git push origin "enlace-nest-v${{ steps.version.outputs.devVersion }}"
 
-  # Requires deploy-dev to have succeeded first — prod never ships
-  # anything that hasn't just gone out (or already sat unchanged) as a dev
-  # build. Also gated behind the Prod environment's required-reviewer
-  # approval: this job pauses here until someone approves it.
+  # Requires deploy-dev to have succeeded first — prod never ships anything
+  # that hasn't just gone out (or already sat unchanged) as a dev build.
+  # Also gated behind the Prod environment's required-reviewer approval:
+  # this job pauses here until someone approves it.
   deploy-prod:
     needs: deploy-dev
     runs-on: ubuntu-latest
@@ -94,6 +172,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # ref: main, same reason as deploy-dev above — must see
+          # handle-ui-release's widened-range commit from this same run,
+          # not the stale pre-dispatch SHA.
+          ref: main
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
