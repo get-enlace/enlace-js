@@ -29,27 +29,22 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
 
-      # Only @get-enlace/express exists today — this step publishes it
-      # directly rather than looping over packages/*, since a loop would be
-      # speculative complexity for a single package. Extend this (see
-      # get-enlace/enlace-ui's own main.yml for the per-workspace pattern
-      # used there once it had two packages) once a second adapter
-      # (@get-enlace/nest, etc.) actually lands here.
-      - name: Compute dev build version
-        id: version
-        run: echo "dev_version=$(node -p "require('./packages/enlace-express/package.json').version")-dev.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-
-      - name: Bump to the dev version
-        run: npm pkg set version=${{ steps.version.outputs.dev_version }} --workspace @get-enlace/express
-
-      - name: Publish to GitHub Packages (dev dist-tag)
-        run: npm publish --workspace @get-enlace/express --tag dev
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Tag this build
+      # Loops over every package under packages/* rather than a matrix job,
+      # so the shared npm ci/typecheck/build steps above run once for the
+      # whole workspace instead of once per package. Each package gets its
+      # own dev version (independent of the others) and its own git tag,
+      # prefixed with the package directory so tags never collide.
+      - name: Publish each package (dev dist-tag) and tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ steps.version.outputs.dev_version }}"
-          git push origin "v${{ steps.version.outputs.dev_version }}"
+          for dir in enlace-express enlace-nest; do
+            pkg="$(node -p "require('./packages/${dir}/package.json').name")"
+            dev_version="$(node -p "require('./packages/${dir}/package.json').version")-dev.${{ github.run_number }}"
+            npm pkg set version="$dev_version" --workspace "$pkg"
+            npm publish --workspace "$pkg" --tag dev
+            git tag "${dir}-v${dev_version}"
+            git push origin "${dir}-v${dev_version}"
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

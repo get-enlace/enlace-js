@@ -11,10 +11,11 @@ design.
 ## Packages
 
 - **`packages/enlace-express`** (`@get-enlace/express`) — Express adapter.
+- **`packages/enlace-nest`** (`@get-enlace/nest`) — NestJS adapter.
 
-More planned: `@get-enlace/nest`, `@get-enlace/fastify`. Each new adapter is
-its own package here, alongside the others, not a separate repo — same
-shared CI, same install/build conventions.
+More planned: `@get-enlace/fastify`. Each new adapter is its own package
+here, alongside the others, not a separate repo — same shared CI, same
+install/build conventions.
 
 ## Development
 
