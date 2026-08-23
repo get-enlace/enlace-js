@@ -9,29 +9,26 @@ on:
       - package-lock.json
       - .github/workflows/enlace-express.yml
   # Fired by enlace-ui's own release workflow after it publishes (dev or
-  # prod) — release-strategy.md §5/§6. This package is dependency-based
-  # (§2): ordinary patch/minor enlace-ui releases reach consumers on their
-  # own next `npm install` via the semver-range dependency below, with no
-  # rebuild needed here. This listener only has real work to do when the
-  # payload signals a major bump — see handle-ui-release below. No
-  # workflow_dispatch escape hatch — a manual override is just a commit
-  # (e.g. a manually-bumped dependency range) pushed to main.
+  # prod) — release-strategy.md §5/§6. This package pins an *exact*
+  # @get-enlace/ui version for its prod publishes (packages/enlace-express/
+  # ui-version.txt), so it needs to react to every production release, not
+  # just majors — see handle-ui-release below. No workflow_dispatch escape
+  # hatch — a manual override is just a commit pushed to main.
   repository_dispatch:
     types: [enlace-ui-release]
 
 jobs:
   # Only meaningful for a *production* dispatch — a dev dispatch's
-  # ui-version can carry a "-dev.<run>" prerelease suffix, which would
-  # still extract a real major version below and could widen the range
-  # against a major that hasn't actually shipped to npmjs.org yet. Decides
-  # whether @get-enlace/ui's declared dependency range needs widening, and
-  # if so, does that and falls through into the normal deploy-dev/deploy-prod
-  # path below — it never publishes anything itself.
+  # ui-version carries a "-dev.<run>" prerelease suffix, which is never a
+  # valid pin target. Does exactly one thing: pins the incoming version
+  # into ui-version.txt and commits it. Not a dependency of deploy-dev (no
+  # `needs:` from there to here) — deploy-dev doesn't use this pin at all
+  # (see below), and this commit's push can't retrigger the workflow
+  # anyway (GITHUB_TOKEN pushes don't, by GitHub's own loop-prevention
+  # rule).
   handle-ui-release:
     if: github.event_name == 'repository_dispatch' && github.event.client_payload.environment == 'production'
     runs-on: ubuntu-latest
-    outputs:
-      bumped: ${{ steps.check.outputs.bumped }}
     permissions:
       contents: write
     steps:
@@ -39,52 +36,39 @@ jobs:
         with:
           ref: main
 
-      - name: Read incoming ui-version
-        id: incoming
-        run: echo "ui_version=${{ github.event.client_payload.ui-version }}" >> "$GITHUB_OUTPUT"
-
-      - name: Compare major version against declared dependency
-        id: check
-        run: |
-          incoming_major="$(echo "${{ steps.incoming.outputs.ui_version }}" | cut -d. -f1)"
-          # @get-enlace/ui's dependency entry is a bare "dev" dist-tag until
-          # enlace-ui's first real prod semver release exists (see README) —
-          # nothing to compare a major against yet, so this is always a
-          # no-op until that entry becomes a real ^N.x range.
-          current="$(node -p "require('./packages/enlace-express/package.json').dependencies['@get-enlace/ui']")"
-          if [[ ! "$current" =~ ^\^?[0-9]+ ]]; then
-            echo "no-op: @get-enlace/ui dependency is '$current', not a semver range yet — nothing to compare"
-            echo "bumped=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          current_major="$(echo "$current" | tr -d '^' | cut -d. -f1)"
-          if [ "$incoming_major" -gt "$current_major" ]; then
-            echo "@get-enlace/ui major bumped ($current -> ^${incoming_major}.0.0) — widening the range"
-            npm pkg set "dependencies.@get-enlace/ui=^${incoming_major}.0.0" --workspace @get-enlace/express
-            echo "bumped=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "no-op: incoming major ($incoming_major) does not exceed current floor ($current_major)"
-            echo "bumped=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Commit widened dependency range
-        if: steps.check.outputs.bumped == 'true'
+      - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/enlace-express/package.json
-          git commit -m "chore(enlace-express): widen @get-enlace/ui range for major ${{ steps.incoming.outputs.ui_version }}"
+
+      - name: Update pinned @get-enlace/ui version
+        id: pin
+        run: |
+          new_version="${{ github.event.client_payload.ui-version }}"
+          current_version="$(cat packages/enlace-express/ui-version.txt 2>/dev/null || true)"
+          if [ "$new_version" = "$current_version" ]; then
+            echo "ui-version.txt already pinned to ${new_version} — nothing to do"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$new_version" > packages/enlace-express/ui-version.txt
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit pinned version
+        if: steps.pin.outputs.changed == 'true'
+        run: |
+          git add packages/enlace-express/ui-version.txt
+          git commit -m "chore(enlace-express): pin @get-enlace/ui to ${{ github.event.client_payload.ui-version }} (enlace-ui-release dispatch)"
           git push origin HEAD:main
 
+  # Unconditional — runs on every trigger (push, or repository_dispatch for
+  # either environment). Its own npm ci resolves @get-enlace/ui via the
+  # committed "dev" dist-tag (see package.json) — completely decoupled
+  # from ui-version.txt, which deploy-prod alone reads, transiently, right
+  # before publishing. That's what keeps this job's install always
+  # resolvable: "dev" is the only thing that reliably exists in the
+  # registry it installs from.
   deploy-dev:
-    # Runs on ordinary pushes unconditionally; on a dispatch-triggered run,
-    # only proceeds if handle-ui-release actually needed to act (a
-    # same/lower-major release is a legitimate no-op for this job too — the
-    # semver-range dependency already covers it without a rebuild here).
-    if: |
-      github.event_name == 'push' ||
-      needs.handle-ui-release.outputs.bumped == 'true'
-    needs: [handle-ui-release]
     runs-on: ubuntu-latest
     environment: development
     permissions:
@@ -93,10 +77,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # ref: main, not the default (github.sha, the pre-dispatch SHA on
-          # a repository_dispatch run) — handle-ui-release may have just
-          # committed a widened dependency range in this same run, and this
-          # checkout needs to see it, not the stale trigger-time commit.
           ref: main
           # Full history + tags — "Check for changes" below diffs against
           # this package's most recent enlace-express-v* tag (dev or prod)
@@ -172,11 +152,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # ref: main, same reason as deploy-dev above — must see
-          # handle-ui-release's widened-range commit from this same run,
-          # not the stale pre-dispatch SHA.
+          # ref: main — must see handle-ui-release's pin commit from this
+          # same run (production dispatch case), not the stale
+          # pre-dispatch SHA.
           ref: main
           fetch-depth: 0
+
+      # Hard guard, not just documentation: fail fast, before any build
+      # work, if there's nothing real to pin. ui-version.txt starts life
+      # as "unreleased" and only ever becomes real once enlace-ui's own
+      # first prod release fires a dispatch that pins it — publishing with
+      # anything else in there would ship a broken dependency (not valid
+      # semver at all) to every real consumer.
+      - name: Refuse to publish without a real pinned @get-enlace/ui version
+        run: |
+          pinned="$(cat packages/enlace-express/ui-version.txt 2>/dev/null || true)"
+          if [[ ! "$pinned" =~ ^[0-9] ]]; then
+            echo "::error::packages/enlace-express/ui-version.txt is '${pinned:-<empty>}', not a real version — enlace-ui needs a real prod release first, which pins this file via handle-ui-release, before a prod release here is valid."
+            exit 1
+          fi
+          echo "pinned_version=$pinned" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -214,6 +209,14 @@ jobs:
         with:
           registry-url: 'https://registry.npmjs.org'
 
+      # Transient — pins the exact @get-enlace/ui version into
+      # package.json just for this publish, so the published tarball is
+      # fully deterministic. Reverted right after, so the committed repo
+      # state keeps the "dev" placeholder every npm ci elsewhere relies on
+      # (never gets swept up into the version-bump commit below).
+      - name: Pin @get-enlace/ui to the exact version for this publish
+        run: npm pkg set "dependencies.@get-enlace/ui=${{ env.pinned_version }}" --workspace @get-enlace/express
+
       - name: Publish to npm (prod)
         # --access public: scoped packages (@get-enlace/...) default to
         # restricted access on npmjs.org, which needs a paid org plan
@@ -221,6 +224,9 @@ jobs:
         run: npm publish --workspace @get-enlace/express --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Revert the transient dependency pin
+        run: git checkout -- packages/enlace-express/package.json
 
       - name: Tag the release
         run: git tag "enlace-express-v${{ steps.current.outputs.version }}"
