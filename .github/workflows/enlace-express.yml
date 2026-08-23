@@ -217,14 +217,19 @@ jobs:
       - name: Pin @get-enlace/ui to the exact version for this publish
         run: npm pkg set "dependencies.@get-enlace/ui=${{ env.pinned_version }}" --workspace @get-enlace/express
 
+      # packages/enlace-express/package.json's own publishConfig.registry
+      # points at GitHub Packages (needed so deploy-dev's plain `npm
+      # publish` defaults there). An explicit --registry flag does NOT
+      # reliably override publishConfig — long-standing npm bug
+      # (npm/cli#6400), confirmed on enlace-ui's real first prod-publish
+      # attempt, where --registry silently lost and the publish 401'd
+      # against GitHub Packages. Removing publishConfig transiently instead
+      # of relying on a flag that's proven unreliable here; reverted by the
+      # same git checkout below that already undoes the dependency pin.
+      - name: Remove publishConfig for this publish (see comment above)
+        run: npm pkg delete publishConfig.registry --workspace @get-enlace/express
+
       - name: Publish to npm (prod)
-        # --registry explicitly: packages/enlace-express/package.json's own
-        # publishConfig.registry points at GitHub Packages (needed so
-        # deploy-dev's plain `npm publish` defaults there) — publishConfig
-        # takes precedence over setup-node's registry-url above, so without
-        # this flag npm publish would silently try GitHub Packages here too
-        # and fail with a 401 (confirmed — this exact bug hit enlace-ui's
-        # own first prod publish attempt before this fix).
         # --access public: scoped packages (@get-enlace/...) default to
         # restricted access on npmjs.org, which needs a paid org plan
         # unless publish explicitly opts into public access.
@@ -232,7 +237,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Revert the transient dependency pin
+      - name: Revert the transient dependency pin and publishConfig removal
         run: git checkout -- packages/enlace-express/package.json
 
       - name: Tag the release
