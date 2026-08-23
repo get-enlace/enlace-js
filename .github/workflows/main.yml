@@ -1,9 +1,9 @@
 name: Build, Publish (dev), Tag
 
 on:
-  # Manual-only for now, matching get-enlace/enlace-ui's own dev-publish
-  # workflow before it went live on every push — flip to push: branches:
-  # [main] once a manual run has been confirmed working end to end.
+  push:
+    branches: [main]
+  # Manual fallback — e.g. to retry a publish without pushing an empty commit.
   workflow_dispatch: {}
 
 permissions:
@@ -15,6 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags, not just the latest commit — each
+          # package's most recent <dir>-v* tag is the "since last publish"
+          # marker the publish step diffs against below.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -31,14 +36,24 @@ jobs:
 
       # Loops over every package under packages/* rather than a matrix job,
       # so the shared npm ci/typecheck/build steps above run once for the
-      # whole workspace instead of once per package. Each package gets its
-      # own dev version (independent of the others) and its own git tag,
-      # prefixed with the package directory so tags never collide.
-      - name: Publish each package (dev dist-tag) and tag
+      # whole workspace instead of once per package. Each package is
+      # published independently — its own dev version, its own git tag
+      # (prefixed with the package directory so tags never collide) — and,
+      # crucially, only if it actually changed: a package's most recent
+      # <dir>-v* tag marks its last publish, and if nothing under
+      # packages/<dir>/ differs from that tag, it's skipped rather than
+      # republished unchanged. No tag yet (first-ever publish) always
+      # counts as changed.
+      - name: Publish changed packages (dev dist-tag) and tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           for dir in enlace-express enlace-nest; do
+            last_tag="$(git tag -l "${dir}-v*" --sort=-creatordate | head -n1)"
+            if [ -n "$last_tag" ] && git diff --quiet "$last_tag" -- "packages/${dir}"; then
+              echo "packages/${dir}: unchanged since ${last_tag}, skipping"
+              continue
+            fi
             pkg="$(node -p "require('./packages/${dir}/package.json').name")"
             # run_id, not run_number: run_number resets to 1 per workflow
             # file, which collided head-on with @get-enlace/express's
