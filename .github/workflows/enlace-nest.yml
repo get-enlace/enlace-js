@@ -217,27 +217,33 @@ jobs:
       - name: Pin @get-enlace/ui to the exact version for this publish
         run: npm pkg set "dependencies.@get-enlace/ui=${{ env.pinned_version }}" --workspace @get-enlace/nest
 
-      # packages/enlace-nest/package.json's own publishConfig.registry
-      # points at GitHub Packages (needed so deploy-dev's plain `npm
-      # publish` defaults there). An explicit --registry flag does NOT
-      # reliably override publishConfig — long-standing npm bug
-      # (npm/cli#6400), confirmed on enlace-ui's real first prod-publish
-      # attempt, where --registry silently lost and the publish 401'd
-      # against GitHub Packages. Removing publishConfig transiently instead
-      # of relying on a flag that's proven unreliable here; reverted by the
-      # same git checkout below that already undoes the dependency pin.
-      - name: Remove publishConfig for this publish (see comment above)
-        run: npm pkg delete publishConfig.registry --workspace @get-enlace/nest
-
+      # Root cause confirmed on enlace-ui's real prod-publish attempts (took
+      # two wrong guesses first — see its main.yml for the full story): the
+      # FIRST setup-node call above (before npm ci) passes both
+      # registry-url AND scope: '@get-enlace', which writes a SCOPED
+      # registry mapping (@get-enlace:registry=https://npm.pkg.github.com)
+      # into the generated .npmrc — a more specific config key than the
+      # general `registry=` default the second setup-node call sets, and
+      # also more specific than this repo's own committed .npmrc. npm
+      # always prefers a scope-specific registry over the general default
+      # for a scoped package, so neither publishConfig.registry nor a bare
+      # --registry flag ever actually touched the real blocker. Overriding
+      # that exact scoped key directly is what works — CLI flags are the
+      # one thing with higher precedence than any .npmrc tier (including
+      # the committed one).
       - name: Publish to npm (prod)
         # --access public: scoped packages (@get-enlace/...) default to
         # restricted access on npmjs.org, which needs a paid org plan
         # unless publish explicitly opts into public access.
-        run: npm publish --workspace @get-enlace/nest --registry https://registry.npmjs.org --access public
+        run: >
+          npm publish --workspace @get-enlace/nest
+          --registry https://registry.npmjs.org
+          --@get-enlace:registry=https://registry.npmjs.org
+          --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Revert the transient dependency pin and publishConfig removal
+      - name: Revert the transient dependency pin
         run: git checkout -- packages/enlace-nest/package.json
 
       - name: Tag the release
