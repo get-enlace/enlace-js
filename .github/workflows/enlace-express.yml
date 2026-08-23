@@ -1,0 +1,169 @@
+name: "@get-enlace/express"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/enlace-express/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/enlace-express.yml
+  workflow_dispatch: {}
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags — "Check for changes" below diffs against
+          # this package's most recent enlace-express-v* tag (dev or prod)
+          # to decide whether there's anything new to publish.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@get-enlace'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npm run typecheck --workspace @get-enlace/express
+      - run: npm run build --workspace @get-enlace/express
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check for changes since last publish
+        id: diff
+        run: |
+          last_tag="$(git tag -l "enlace-express-v*" --sort=-creatordate | head -n1)"
+          if [ -n "$last_tag" ] && git diff --quiet "$last_tag" -- packages/enlace-express; then
+            echo "packages/enlace-express: unchanged since ${last_tag}"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set the dev version
+        id: version
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          # run_id, not run_number: run_number resets to 1 per workflow
+          # file, which previously collided with @get-enlace/express's
+          # existing dev.1-dev.4 versions (published by enlace-ui's old CI
+          # under that same repo-local counter, before the package moved
+          # here). run_id is unique across every run on GitHub, forever.
+          dev_version="$(node -p "require('./packages/enlace-express/package.json').version")-dev.${{ github.run_id }}"
+          npm pkg set version="$dev_version" --workspace @get-enlace/express
+          echo "devVersion=$dev_version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to GitHub Packages (dev)
+        if: steps.diff.outputs.changed == 'true'
+        run: npm publish --workspace @get-enlace/express --tag dev
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git tag "enlace-express-v${{ steps.version.outputs.devVersion }}"
+          git push origin "enlace-express-v${{ steps.version.outputs.devVersion }}"
+
+  # Requires deploy-dev to have succeeded first — prod never ships
+  # anything that hasn't just gone out (or already sat unchanged) as a dev
+  # build. Also gated behind the Prod environment's required-reviewer
+  # approval: this job pauses here until someone approves it.
+  deploy-prod:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@get-enlace'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npm run typecheck --workspace @get-enlace/express
+      - run: npm run build --workspace @get-enlace/express
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # Whatever's already committed in package.json is what gets
+      # published — semver bump type (patch/minor/major) is a human call,
+      # decided by editing package.json before this runs, not guessed by
+      # CI.
+      - name: Read current version
+        id: current
+        run: echo "version=$(node -p "require('./packages/enlace-express/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # A second setup-node call, switching the active registry from
+      # GitHub Packages to npmjs.org for the rest of this job — the
+      # documented way to publish to a different registry mid-job without
+      # disturbing the GitHub Packages auth the earlier steps relied on.
+      - name: Point npm at npmjs.org
+        uses: actions/setup-node@v4
+        with:
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish to npm (prod)
+        # --access public: scoped packages (@get-enlace/...) default to
+        # restricted access on npmjs.org, which needs a paid org plan
+        # unless publish explicitly opts into public access.
+        run: npm publish --workspace @get-enlace/express --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Tag the release
+        run: git tag "enlace-express-v${{ steps.current.outputs.version }}"
+
+      # Stages the next release as a patch bump on top of what was just
+      # published. Edit packages/enlace-express/package.json by hand
+      # before the next prod release if it actually needs a bigger
+      # (minor/major) bump.
+      - name: Compute next patch version
+        id: next
+        run: |
+          next_version="$(node -e "
+            const [major, minor, patch] = '${{ steps.current.outputs.version }}'.split('.').map(Number);
+            console.log([major, minor, patch + 1].join('.'));
+          ")"
+          echo "version=$next_version" >> "$GITHUB_OUTPUT"
+
+      - name: Bump to next version
+        run: |
+          npm pkg set version="${{ steps.next.outputs.version }}" --workspace @get-enlace/express
+          git add packages/enlace-express/package.json
+
+      - name: Commit version bump
+        run: |
+          git commit -m "chore(enlace-express): bump to ${{ steps.next.outputs.version }} after v${{ steps.current.outputs.version }} release"
+
+      - name: Push commit and tag
+        run: git push origin HEAD:main "enlace-express-v${{ steps.current.outputs.version }}"

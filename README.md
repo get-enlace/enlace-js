@@ -31,5 +31,21 @@ to that package's source, only its published bundle.
 
 ## Publishing
 
-Dev builds publish to GitHub Packages under the `dev` dist-tag, same
-pattern as `get-enlace/enlace-ui`. See `.github/workflows/main.yml`.
+Three workflows under `.github/workflows/`:
+
+- **`build.yml`** — every PR: typecheck, build, test, e2e across the whole
+  workspace.
+- **`enlace-express.yml`** / **`enlace-nest.yml`** — one per package,
+  path-scoped to that package's own directory so unrelated packages don't
+  rebuild or republish on each other's changes. On push to `main`:
+  `deploy-dev` publishes to GitHub Packages' `dev` dist-tag (skipped if
+  that package hasn't changed since its last publish), then `deploy-prod`
+  — gated behind the `production` environment's required-reviewer
+  approval — publishes the version already committed in that package's
+  `package.json` to npmjs.org, tags it, and bumps the patch version for
+  next time.
+
+Publishing to npmjs.org needs an `NPM_TOKEN` secret scoped to the
+`production` GitHub Environment. The `development`/`production`
+environments already exist (Settings → Environments); `production` still
+needs required reviewers configured there before the gate does anything.

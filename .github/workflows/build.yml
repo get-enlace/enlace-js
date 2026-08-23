@@ -1,4 +1,4 @@
-name: PR Checks
+name: Build & Test
 
 on:
   pull_request:
@@ -6,14 +6,12 @@ on:
 
 permissions:
   contents: read
-  # @get-enlace/ui is installed from GitHub Packages (see .npmrc) — npm
-  # install needs at least read access to resolve it, even though this
-  # workflow never publishes anything itself.
+  # @get-enlace/ui is installed from GitHub Packages (see .npmrc) — npm ci
+  # needs at least read access to resolve it.
   packages: read
 
 jobs:
-  checks:
-    name: Typecheck + build
+  build-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,3 +27,4 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+      - run: npm run e2e
