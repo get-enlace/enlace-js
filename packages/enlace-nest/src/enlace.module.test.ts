@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { NestFactory } from '@nestjs/core';
-import { Module, type INestApplication } from '@nestjs/common';
+import { APP_GUARD, NestFactory } from '@nestjs/core';
+import {
+  Module,
+  Injectable,
+  type CanActivate,
+  type INestApplication,
+} from '@nestjs/common';
 import request from 'supertest';
 import { EnlaceModule } from './enlace.module.js';
 
@@ -103,6 +108,34 @@ describe('EnlaceModule', () => {
       const uiRes = await request(app.getHttpServer()).get('/canvas/index.html');
       expect(uiRes.status).toBe(200);
       expect(uiRes.type).toBe('text/html');
+    });
+
+    it("is not gated behind the host app's global guards", async () => {
+      // A host app commonly registers an app-wide auth guard via APP_GUARD
+      // (e.g. `{ provide: APP_GUARD, useClass: JwtAuthGuard }` in its own
+      // auth module). Because the spec route is registered directly on the
+      // HTTP adapter (see specRoute.ts) rather than as a Nest @Controller,
+      // it never enters Nest's guard pipeline, so it must stay reachable
+      // even when every request would otherwise be denied.
+      class DenyEverythingGuard implements CanActivate {
+        canActivate(): boolean {
+          return false;
+        }
+      }
+      Injectable()(DenyEverythingGuard);
+
+      class AppModule {}
+      Module({
+        imports: [EnlaceModule.forRoot({ spec: sampleSpec })],
+        providers: [{ provide: APP_GUARD, useClass: DenyEverythingGuard }],
+      })(AppModule);
+
+      app = await NestFactory.create(AppModule, { logger: false });
+      await app.init();
+
+      const spec = await request(app.getHttpServer()).get('/enlace/api/spec');
+      expect(spec.status).toBe(200);
+      expect(spec.body).toEqual(sampleSpec);
     });
 
     it('supports setSpec — forRoot() with no spec, then setSpec(app, spec) before requests', async () => {

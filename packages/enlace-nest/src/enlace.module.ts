@@ -1,10 +1,9 @@
 import { DynamicModule, Module, type INestApplication } from '@nestjs/common';
-import { RouterModule } from '@nestjs/core';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { ENLACE_OPTIONS } from './constants.js';
-import { EnlaceController } from './enlace.controller.js';
+import { ENLACE_MOUNT_PATH, ENLACE_OPTIONS } from './constants.js';
+import { SpecRouteRegistrar } from './specRoute.js';
 import type { SpecSource } from './specLoader.js';
 
 const require = createRequire(import.meta.url);
@@ -41,7 +40,7 @@ export interface EnlaceOptions {
 /**
  * Internal module class used by `forRoot()` — keeps its DynamicModule
  * metadata isolated from EnlaceModule's own @Module() defaults so
- * controllers and providers aren't double-registered.
+ * providers aren't double-registered.
  * @internal
  */
 @Module({})
@@ -63,7 +62,11 @@ class EnlaceConfiguredModule {}
  * This adapter's job is deliberately small — per ARCHITECTURE.md's MVP
  * model, execution runs entirely client-side in @get-enlace/ui, so there's
  * no `/api/run` or `/api/credentials` here at all. All this does is:
- *   - serve the raw OpenAPI document via EnlaceController
+ *   - serve the raw OpenAPI document at `<mount>/api/spec`, registered
+ *     directly on the underlying HTTP adapter (see specRoute.ts) rather
+ *     than as a Nest controller, so it isn't gated behind whatever global
+ *     guards/interceptors the host app has registered — true zero-config,
+ *     no exception needed on the host app's side
  *   - serve the built UI bundle via @nestjs/serve-static
  */
 @Module({
@@ -73,16 +76,14 @@ class EnlaceConfiguredModule {}
       serveRoot: '/enlace',
       exclude: ['/enlace/api/{*splat}'],
     }),
-    // Self-reference is safe here — TypeScript's legacy-decorator transform
-    // evaluates the @Module() argument after the class expression is assigned,
-    // so the EnlaceModule binding already exists. RouterModule just stores
-    // the reference for later prefix resolution, no circular import.
-    RouterModule.register([{ path: 'enlace', module: EnlaceModule }]),
   ],
-  controllers: [EnlaceController],
   // useFactory (not useValue) so each NestFactory.create() gets its own
   // options object — otherwise setSpec() on one app would leak into another.
-  providers: [{ provide: ENLACE_OPTIONS, useFactory: () => ({ spec: undefined }) }],
+  providers: [
+    { provide: ENLACE_OPTIONS, useFactory: () => ({ spec: undefined }) },
+    { provide: ENLACE_MOUNT_PATH, useValue: 'enlace' },
+    SpecRouteRegistrar,
+  ],
 })
 export class EnlaceModule {
   /**
@@ -91,7 +92,7 @@ export class EnlaceModule {
    *
    *   EnlaceModule.setSpec(app, SwaggerModule.createDocument(app, config));
    *
-   * Works because EnlaceController reads `options.spec` fresh on every
+   * Works because SpecRouteRegistrar reads `options.spec` fresh on every
    * request (via `loadSpec`), not a snapshot taken at module-definition
    * time — so whatever's assigned here is what gets served.
    */
@@ -120,10 +121,12 @@ export class EnlaceModule {
           serveRoot: `/${mountPath}`,
           exclude: [`/${mountPath}/api/{*splat}`],
         }),
-        RouterModule.register([{ path: mountPath, module: EnlaceConfiguredModule }]),
       ],
-      controllers: [EnlaceController],
-      providers: [{ provide: ENLACE_OPTIONS, useValue: opts }],
+      providers: [
+        { provide: ENLACE_OPTIONS, useValue: opts },
+        { provide: ENLACE_MOUNT_PATH, useValue: mountPath },
+        SpecRouteRegistrar,
+      ],
     };
   }
 }
