@@ -1,6 +1,5 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
-import type { Request, Response } from 'express';
 import { ENLACE_MOUNT_PATH, ENLACE_OPTIONS } from './constants.js';
 import { loadSpec } from './specLoader.js';
 import type { EnlaceOptions } from './enlace.module.js';
@@ -36,12 +35,20 @@ export class SpecRouteRegistrar implements OnModuleInit {
 
   onModuleInit(): void {
     const httpAdapter = this.adapterHost.httpAdapter;
-    httpAdapter.get(`/${this.mountPath}/api/spec`, (_req: Request, res: Response) => {
+    // `httpAdapter.reply(res, body, statusCode)` — not `res.status().json()`
+    // — is the deliberately adapter-agnostic primitive Nest itself uses to
+    // send a response from inside its own controller pipeline. It's
+    // implemented identically by ExpressAdapter and FastifyAdapter (JSON
+    // body + status code, on whichever platform is actually running), so
+    // this route works the same whether the host app is Express- or
+    // Fastify-based — unlike Express-specific chaining (`res.status(x).json(y)`),
+    // which would throw under Fastify (`FastifyReply` has no `.json()`).
+    httpAdapter.get(`/${this.mountPath}/api/spec`, (_req: unknown, res: unknown) => {
       if (this.options.spec == null) {
-        res.status(503).json({ statusCode: 503, message: NO_SPEC_MESSAGE });
+        httpAdapter.reply(res, { statusCode: 503, message: NO_SPEC_MESSAGE }, 503);
         return;
       }
-      res.status(200).json(loadSpec(this.options.spec));
+      httpAdapter.reply(res, loadSpec(this.options.spec), 200);
     });
   }
 }
