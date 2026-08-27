@@ -37,6 +37,16 @@ export class AppModule {}
 
 `spec` accepts a file path, a URL, or an already-parsed OpenAPI 3.x object.
 
+### What Enlace needs from your spec
+
+Whatever produces it, `servers[0].url` needs to be your API's real, reachable base URL — Enlace
+sends every request in a chain straight there from the browser. `operationId` is optional (Enlace
+falls back to a synthetic `METHOD /path` label without one) but is what shows on the node and in
+the operation search — `@nestjs/swagger` sets one per route by default (`ControllerName_methodName`).
+
+Already serving `@nestjs/swagger`'s own Swagger UI from that same document? Handing it to Enlace
+too doesn't change how that keeps working — they're independent consumers of the same object.
+
 ### Custom mount path
 
 By default the canvas is at `/enlace`. To change it:
